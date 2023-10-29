@@ -3,7 +3,7 @@ using UnityEngine;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Utilities;
 using Unity.Collections;
-
+using UnityEngine.UI;
 
 namespace ChatClientExample
 {
@@ -16,14 +16,19 @@ namespace ChatClientExample
         HANDSHAKE_RESPONSE,
         CHAT_MESSAGE,
         CHAT_QUIT,
-        CREATE_ELEMENT,
-        REMOVE_ELEMENT,
-        PLACE_ELEMENT,
-        NETWORK_SPAWN,
-        END_TURN,
+        CHOOSE_POSITION,
+        RECEIVE_POSITION,
+        SWITCH_TURN,
         PING,
         PONG,
         RPC
+    }
+
+    public enum MatchResult
+    {
+        WIN,
+        DRAW,
+        Undefined
     }
 
     public static class NetworkMessageInfo
@@ -31,7 +36,10 @@ namespace ChatClientExample
         public static Dictionary<NetworkMessageType, System.Type> TypeMap = new Dictionary<NetworkMessageType, System.Type> {
             { NetworkMessageType.HANDSHAKE,                 typeof(HandshakeMessage) },
             { NetworkMessageType.HANDSHAKE_RESPONSE,        typeof(HandshakeResponseMessage) },
+            { NetworkMessageType.SWITCH_TURN,               typeof(TurnSwitchMessage) },
             { NetworkMessageType.CHAT_MESSAGE,              typeof(ChatMessage) },
+            { NetworkMessageType.CHOOSE_POSITION,           typeof(PositionMessage) },
+            { NetworkMessageType.RECEIVE_POSITION,          typeof(PositionResponseMessage) }
         };
     }
 
@@ -40,7 +48,8 @@ namespace ChatClientExample
         static Dictionary<NetworkMessageType, ServerMessageHandler> networkHeaderHandlers = new Dictionary<NetworkMessageType, ServerMessageHandler>{
             { NetworkMessageType.HANDSHAKE, HandleClientHandshake },
             { NetworkMessageType.CHAT_MESSAGE, HandleClientMessage },
-            { NetworkMessageType.END_TURN, HandleTurnEnd },
+            //{ NetworkMessageType.SWITCH_TURN, HandleTurnSwitch },
+            { NetworkMessageType.CHOOSE_POSITION, HandlePositionMessage }
         };
 
         public NetworkDriver m_Driver;
@@ -48,9 +57,21 @@ namespace ChatClientExample
         private NativeList<NetworkConnection> m_Connections;
         private Dictionary<NetworkConnection, string> nameList = new Dictionary<NetworkConnection, string>();
         public ChatCanvas chat;
+        public Text serverBuildDebugText;
 
         private int currentPlayer = 0;
+        private uint[,] field = new uint[3, 3];
 
+        private void Awake()
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                for (int z = 0; z < 3; z++)
+                {
+                    field[i, z] = 0;
+                }
+            }
+        }
         void Start()
         {
             // Create Driver
@@ -66,14 +87,6 @@ namespace ChatClientExample
                 m_Driver.Listen();
             m_Connections = new NativeList<NetworkConnection>(16, Allocator.Persistent);
 
-            for (int i = 0; i < m_Connections.Length; i++)
-            {
-                TurnEndMessage message = new();
-                message.IsMyTurn = i == currentPlayer;
-                m_Driver.BeginSend(m_Connections[i], out var writer);
-                message.SerializeObject(ref writer);
-                m_Driver.EndSend(writer);
-            }
         }
         // Write this immediately after creating the above Start calls, so you don't forget
         //  Or else you well get lingering thread sockets, and will have trouble starting new ones!
@@ -108,7 +121,16 @@ namespace ChatClientExample
                 m_Connections.Add(c);
                 if (m_Connections.Length == 2)
                 {
-                    uint nextId = NetworkManager.NextNetworkID;
+                    for (int i = 0; i < m_Connections.Length; i++)
+                    {
+                        TurnSwitchMessage message = new();
+                        message.IsMyTurn = i == currentPlayer;
+
+                        m_Driver.BeginSend(m_Connections[i], out var writer);
+                        message.SerializeObject(ref writer);
+                        m_Driver.EndSend(writer);
+                    }
+                    //uint nextId = NetworkManager.NextNetworkID;
                     // We can start the match
                 }
                 // Debug.Log("Accepted a connection");
@@ -174,7 +196,6 @@ namespace ChatClientExample
             Server server = handler as Server;
             ChatMessage chatMessage = header as ChatMessage;
             server.chat.NewMessage(chatMessage.Message, ChatCanvas.chatColor);
-
             foreach (NetworkConnection c in server.m_Connections)
             {
                 server.m_Driver.BeginSend(c, out var writer);
@@ -183,16 +204,156 @@ namespace ChatClientExample
             }
         }
 
-        static void HandleTurnEnd(object handler, NetworkConnection connection, MessageHeader header)
+        static void HandlePositionMessage(object handler, NetworkConnection connection, MessageHeader header)
         {
             Server serv = handler as Server;
-            TurnEndMessage turnEndMessage = header as TurnEndMessage;
-            for (int i = 0; i < serv.m_Connections.Length; i++)
+            PositionMessage positionMessage = header as PositionMessage;
+            if(connection != serv.m_Connections[serv.currentPlayer])
+            {             
+                ChatMessage failMessage = new ChatMessage();
+                failMessage.Message = "It isn't your turn yet!";
+                serv.m_Driver.BeginSend(connection, out var writer);
+                failMessage.SerializeObject(ref writer);
+                serv.m_Driver.EndSend(writer);
+                return;
+            }
+            uint x = positionMessage.PositionX;
+            uint y = positionMessage.PositionY;
+
+            if(serv.field[x,y] != 0)
             {
-                serv.m_Driver.BeginSend(serv.m_Connections[i], out var writer);
-                turnEndMessage.SerializeObject(ref writer);
+                serv.chat.NewMessage("Attempting to play on a field that already has been played on!", Color.red);
+
+                ChatMessage failMessage = new ChatMessage();
+                failMessage.Message = "Invalid field selected! Please try a free one!";
+                serv.m_Driver.BeginSend(connection, out var writer);
+                failMessage.SerializeObject(ref writer);
+                serv.m_Driver.EndSend(writer);
+                return;
+            }
+            //serv.serverBuildDebugText.text = $"Received positions [{x},{y}] for player {serv.currentPlayer + 1}";
+
+            serv.field[x, y] = (uint)serv.currentPlayer + 1;
+
+            PositionResponseMessage response = new PositionResponseMessage();
+
+            response.PositionX = positionMessage.PositionX;
+            response.PositionY = positionMessage.PositionY;
+            response.Value = (uint)serv.currentPlayer + 1;
+
+            foreach(NetworkConnection con in serv.m_Connections)
+            {
+                serv.m_Driver.BeginSend(con, out var writer);
+                response.SerializeObject(ref writer);
                 serv.m_Driver.EndSend(writer);
             }
+
+            uint result = serv.EvaluateWinStatus();
+
+            if (result == 5)
+            {
+                serv.serverBuildDebugText.text = "Conclusion reached! Player " + serv.currentPlayer+1 + " won!";
+
+                ChatMessage winMessage = new ChatMessage();
+                winMessage.Message = $"Player {serv.currentPlayer + 1} has won!";
+                foreach (NetworkConnection c in serv.m_Connections)
+                {
+                    serv.m_Driver.BeginSend(c, out var writer);
+                    winMessage.SerializeObject(ref writer);
+                    serv.m_Driver.EndSend(writer);
+                }
+
+            }
+            if(result == 1)
+            {
+                serv.serverBuildDebugText.text = "Conclusion reached! It's a draw!";
+
+                ChatMessage drawMessage = new ChatMessage();
+                drawMessage.Message = "It's a draw!";
+                foreach (NetworkConnection c in serv.m_Connections)
+                {
+                    serv.m_Driver.BeginSend(c, out var writer);
+                    drawMessage.SerializeObject(ref writer);
+                    serv.m_Driver.EndSend(writer);
+                }
+            }
+            if(result == 0)
+            {
+                serv.serverBuildDebugText.text = "No conclusion reached yet, should move on to next move";
+
+
+                serv.currentPlayer = (serv.currentPlayer + 1) % 2;
+
+                for (int i = 0; i < serv.m_Connections.Length; i++)
+                {
+
+                    TurnSwitchMessage message = new TurnSwitchMessage();
+                    message.IsMyTurn = serv.currentPlayer == i;
+
+                    serv.m_Driver.BeginSend(serv.m_Connections[i], out var turnWriter);
+                    message.SerializeObject(ref turnWriter);
+                    serv.m_Driver.EndSend(turnWriter);
+
+                }
+            }         
+        }
+
+        uint EvaluateWinStatus()
+        {
+            for (int z = 0; z < 3; z++)
+            {
+                uint a = field[0, z];
+                uint b = field[1, z];
+                uint c = field[2, z];
+
+                if (a != 0 && a == b && b == c)
+                {
+                    return 5;
+                }
+            }
+            for (int v = 0; v < 3; v++)
+            {
+                uint a = field[v, 0];
+                uint b = field[v, 1];
+                uint c = field[v, 2];
+
+                if (a != 0 && a == b && b == c)
+                {
+                    return 5;
+                }
+            }
+
+            uint d = field[0, 0];
+            uint e = field[1, 1];
+            uint f = field[2, 2];
+
+            if (d != 0 && d == e && e == f)
+            {
+                return 5;
+            }
+
+            uint g = field[0, 2];
+            uint h = field[1, 1];
+            uint i = field[2, 0];
+
+            if (g != 0 && g == h && h == i)
+            {
+                return 5;
+            }
+
+            for (int n = 0; n < 3; n++)
+            {
+                for (int m = 0; m < 3; m++)
+                {
+                    if(field[n, m] == 0)
+                    {
+                        return 0;
+                    }
+                }
+            }
+
+            // This is a draw situation
+            return 1;
         }
 
     }

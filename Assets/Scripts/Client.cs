@@ -11,6 +11,7 @@ namespace ChatClientExample
     {
         public ChatCanvas chat;
         public string ClientName = "Justin";
+        public LocalGameManager GameManager;
 
         private NetworkDriver networkDriver;
         private NetworkConnection connection;
@@ -20,6 +21,8 @@ namespace ChatClientExample
         {
             { NetworkMessageType.HANDSHAKE_RESPONSE, HandleHandshakeResponse },
             { NetworkMessageType.CHAT_MESSAGE, HandleChatMessage },
+            { NetworkMessageType.SWITCH_TURN, HandleTurnSwitchMessage },
+            { NetworkMessageType.RECEIVE_POSITION, HandlePositionResponseMessage }
         };
         // Start is called before the first frame update
         void Start()
@@ -52,7 +55,7 @@ namespace ChatClientExample
 
                 if (cmd == NetworkEvent.Type.Connect)
                 {
-                    //Debug.Log("We are now connected to the server");
+                    Debug.Log("We are now connected to the server");
 
                     networkDriver.BeginSend(connection, out var writer);
 
@@ -104,6 +107,14 @@ namespace ChatClientExample
             networkDriver.EndSend(writer);
         }
 
+        public void SendIntendedPosition(uint x, uint y)
+        {
+            PositionMessage message = new PositionMessage();
+            message.PositionX = x;
+            message.PositionY = y;
+            SendNetworkMessage(message);
+        }
+
         public void SendMessageOnServer(string message)
         {
             ChatMessage chatMessage = new ChatMessage();
@@ -124,6 +135,23 @@ namespace ChatClientExample
             ChatMessage chatMessage = header as ChatMessage;
 
             client.chat.NewMessage(chatMessage.Message, ChatCanvas.chatColor);
+        }
+        static void HandlePositionResponseMessage(object handler, MessageHeader header)
+        {
+            Client client = handler as Client;
+            PositionResponseMessage message = header as PositionResponseMessage;
+
+            client.GameManager.ReceiveInput(message.PositionX, message.PositionY, message.Value);
+        }
+        
+        static void HandleTurnSwitchMessage(object handler, MessageHeader header)
+        {
+            Client client = handler as Client;
+            TurnSwitchMessage switchMessage = header as TurnSwitchMessage;
+
+            Debug.Log(switchMessage.IsMyTurn);
+            string message = switchMessage.IsMyTurn ? "It is now your turn" : "It is your opponents turn";
+            client.chat.NewMessage(message, ChatCanvas.joinColor);
         }
 
         private void OnDestroy()
