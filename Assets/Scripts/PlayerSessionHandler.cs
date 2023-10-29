@@ -7,6 +7,7 @@ using UnityEngine.Networking;
 public class PlayerSessionHandler : MonoBehaviour
 {
     public static PlayerSessionHandler Instance { get; private set; }
+    public string UserID { get; set; }
     public string Username { get; set; }
     public string Password { get; set; }
 
@@ -26,6 +27,15 @@ public class PlayerSessionHandler : MonoBehaviour
             coroutine = StartCoroutine(AttemptLogin());
         }
     }
+
+    public void SendScore()
+    {
+        if (coroutine == null)
+        {
+            coroutine = StartCoroutine(SendWinInformation());
+        }
+    }
+
     private IEnumerator AttemptLogin()
     {
 
@@ -45,6 +55,23 @@ public class PlayerSessionHandler : MonoBehaviour
 
             yield return null;
             coroutine = null;
+        }
+    }
+
+    private IEnumerator SendWinInformation()
+    {
+        using (UnityWebRequest www = UnityWebRequest.Get($"https://studenthome.hku.nl/~justin.stolk/NetworkProgramming/Insert_Score.php?user_id={UserID}&score=1&game_id=6"))
+        {
+            yield return www.SendWebRequest();
+
+            if (www.result != UnityWebRequest.Result.Success)
+            {
+                Debug.Log(www.error);
+            }
+            else
+            {
+                Debug.Log(www.downloadHandler.text);
+            }
         }
     }
 }

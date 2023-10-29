@@ -263,6 +263,7 @@ namespace ChatClientExample
                     serv.m_Driver.EndSend(writer);
                 }
 
+
             }
             if(result == 1)
             {
