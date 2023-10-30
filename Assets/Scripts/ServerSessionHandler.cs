@@ -9,7 +9,7 @@ public class ServerSessionHandler : MonoBehaviour
 
     public int ServerID = 1;
     public string Password = "chocoladeTaart7";
-    public int SessionID { get; private set; }
+    public string SessionID { get; private set; }
 
     private void Awake()
     {
@@ -31,8 +31,8 @@ public class ServerSessionHandler : MonoBehaviour
             else
             {
                 Debug.Log(www.downloadHandler.text);
-                int echo = int.Parse(www.downloadHandler.text);
-                if(echo == 0)
+                string echo = www.downloadHandler.text;
+                if(echo == "0")
                 {
                     Debug.Log("Failed to get a session Id back!");
                 }

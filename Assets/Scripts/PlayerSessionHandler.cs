@@ -51,6 +51,7 @@ public class PlayerSessionHandler : MonoBehaviour
             else
             {
                 Debug.Log(www.downloadHandler.text);
+                UnityEngine.SceneManagement.SceneManager.LoadScene(1);
             }
 
             yield return null;
